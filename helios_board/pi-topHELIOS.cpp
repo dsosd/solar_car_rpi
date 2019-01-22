@@ -1,25 +1,14 @@
 #include "pi-topHELIOS.h"
 
-#include <SPI.h>
-#include <Wire.h>
-#include <Adafruit_GPS.h>
-#include <MCP3208.h>
-#include <U8g2lib.h>
-#include <RHReliableDatagram.h>
-#include <RH_RF95.h>
-#include "bitmap_logos.h"
-#include "globals.h"
-#include <math.h>
+#include <Arduino.h>
 
+#include "car_define.h"
 
 //******* DEVICE ADDRESS & BOARD TYPE *******
 //It's essential that the device's unique ID is assigned here
 //This number is used to define a unique 100ms window in which to broadcast
 //So, it is limited to a maximum value of 30
-#define PAIRING_ID	9
-//If this is the chase car board, comment out the line below
-//If it's a solar car board, leave it uncommented
-#define SOLAR_CAR
+#define PAIRING_ID 9
 //TEST USE ONLY - Uncomment if programming old boards (pre V2) //todo: erase this line
 //#define OLD_HARDWARE_PINOUT
 
@@ -27,7 +16,7 @@
 #define FIRMWARE_VERSION_MAJOR	3
 #define FIRMWARE_VERSION_MINOR	0
 #define FIRMWARE_UPDATE_PROMPT //ask user to update to latest firmware
-#define SPLASH_SCREEN_DURATION 1000//1000 //length of time, in ms, to display the splash screen logos on boot
+#define SPLASH_SCREEN_DURATION 1000 //length of time, in ms, to display the splash screen logos on boot
 
 //******* LoRa Radio Object *******
 #define LORA_TX_INTERVAL 5000//1500 //important variable - how long to wait between sending data packets back to chase car
@@ -74,62 +63,13 @@ MCP3208 ExtADC(ADC_CS_PIN);//create the ADC device
 #define PrimaryCorrect 0.0653 //Define Scaling factors for sensors
 #define Shunt .0005 //Define Scaling factors for sensors
 
-//******* GPS Object *******
-#define GPSSerial Serial //Hardware serial port
-Adafruit_GPS GPS(&GPSSerial);// Connect to the GPS on the hardware port
-
-//******* System Defines - DO NOT EDIT THESE VALUES *******
-#ifndef SOLAR_CAR
-	#define CHASE_CAR
-#endif
-
-//_______________________________________________
-//STRUCT DECLARATIONS
-typedef struct {
-	char gpsTime[10]; //8 chars
-	char gpsDate[12]; //10 chars
-	char gpsLongitude[10]; //8 chars
-	char gpsLattitude[10]; //8 chars
-	float gpsSpeed;
-	int gpsSatellites;
-	float adc0;
-	float adc1;
-	float current;
-} packetStruct;
-
-typedef struct {
-	uint32_t rawReading;   //raw numerical reading from the ADC
-	uint32_t rawVoltage;   //actual voltage reading after potential divider
-	float voltage;	  //voltage reading at screw terminal
-	
-} adcStruct;
-
-//_______________________________________________
-//ENUM
-enum{
-
-};
-
-//_______________________________________________
-//GLOBAL VARIABLES
-packetStruct pack;
-adcStruct adc[8]; //global ADC object
-uint8_t datTX[RH_RF95_MAX_MESSAGE_LEN] = "Empty Buffer";
-uint8_t datRX[RH_RF95_MAX_MESSAGE_LEN];// Dont put this on the stack:
-uint8_t draw_state = 0; //for graphics lib
-int connectionState = DISCONNECTED; //global indicator of connection state
-char text[100];
-char text2[50];
-
-
-
 //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //In the Arduino environment, the setup function is called once,
 //at the start of the program, then loop() is called and runs forever
 //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-void setup(){
+void setup_dummy(){
 	//******* Basic Pin Initialisation *******
-	//Do this first so these pins aren't floating for any time, 
+	//Do this first so these pins aren't floating for any time,
 	//since floating pins can cause all sorts of weirdness
 	//Pins are input by default, but are declared explicitly here for clarity
 	//RGB Led
@@ -137,7 +77,9 @@ void setup(){
 	pinMode(RGB_LED_GRN_PIN,OUTPUT);  digitalWrite(RGB_LED_GRN_PIN,LOW);
 	pinMode(RGB_LED_BLU_PIN,OUTPUT);  digitalWrite(RGB_LED_BLU_PIN,LOW);
 	//User Interaction
-	pinMode(BUZZER_PIN,OUTPUT);       digitalWrite(RELAY_PIN,LOW);
+	pinMode(BUZZER_PIN,OUTPUT);
+	digitalWrite(RELAY_PIN, LOW);
+	relay(HIGH); ///enable low voltage alarm on boot
 	pinMode(BUTT0_PIN,INPUT);
 	pinMode(BUTT1_PIN,INPUT);
 	//Spare GPIO
@@ -150,7 +92,7 @@ void setup(){
 	pinMode(UNUSED_1_PIN,INPUT_PULLUP); //don't leave MCU pins floating
 	//GPS Pin Definitions
 	#ifndef OLD_HARDWARE_PINOUT
-		pinMode(GPS_1PPS_PIN,INPUT_PULLUP);	
+		pinMode(GPS_1PPS_PIN,INPUT_PULLUP);
 	#endif
 	//OLED Display Pin Definitions
 	pinMode(OLED_DC_PIN,OUTPUT);      digitalWrite(OLED_DC_PIN,LOW);
@@ -166,22 +108,22 @@ void setup(){
 	//******* Start Virtual USB Serial Port *******
 	SerialUSB.begin(115200);
 	//while(!SerialUSB); //Wait for the serial to begin
-	
+
 	//******* Start HW Serial Port to RasPi *******
 	#ifdef CHASE_CAR
 		Serial.begin(57600);
 	#endif
 
-	//******* Begin Analog-to-Digital Converter ******* 
+	//******* Begin Analog-to-Digital Converter *******
 	ExtADC.begin(); //attempt to talk to ADC on all boards
-	
+
 	//******* Boot OLED display *******
 	//u8g2.begin();
 	u8g2.begin(/*Select=*/ BUTT0_PIN, /*Right/Next=*/ U8X8_PIN_NONE, /*Left/Prev=*/ U8X8_PIN_NONE, /*Up=*/ U8X8_PIN_NONE, /*Down=*/ BUTT1_PIN, /*Home/Cancel=*/ U8X8_PIN_NONE);
 	u8g2.setFont(u8g2_font_6x12_tr);
 	u8g2.clearBuffer();
-	
-	//******* Check what type of board this is ******* 
+
+	//******* Check what type of board this is *******
 	//If we read blanks from ADC, there is no ADC and this must be a chase car board
 	if((ExtADC.analogRead(0)==0x0FFF)&&(ExtADC.analogRead(3)==0x0FFF)&&(ExtADC.analogRead(7)==0x0FFF)){
 		//No GPS module fitted, must be chase car board
@@ -199,11 +141,11 @@ void setup(){
 		#endif
 	}
 
-	//******* User Update Prompt ******* 
+	//******* User Update Prompt *******
 	#ifdef FIRMWARE_UPDATE_PROMPT
 		OLED_fw_update_prompt();
 	#endif
-	
+
 	//******* Display splash screens *******
 	u8g2.setDrawColor(1); // White
 	u8g2.drawBitmap(0,0,16,64,pitop_Logo_Horiz);
@@ -213,8 +155,8 @@ void setup(){
 	u8g2.drawBitmap(0,0,16,64,SCC_Logo_Horiz);
 	OLED_update();
 	delay(SPLASH_SCREEN_DURATION);
-		
-	//******* Begin Analog-to-Digital Converter ******* 
+
+	//******* Begin Analog-to-Digital Converter *******
 	#ifdef SOLAR_CAR
 		ExtADC.begin();
 	#endif
@@ -223,7 +165,7 @@ void setup(){
 	#ifdef SOLAR_CAR
 		SerialUSB.println("Starting GPS Module...");
 		// connect at 115200 so we can read the GPS fast enough and echo without dropping chars
-		// also spit it out  
+		// also spit it out
 		// 9600 NMEA is the default baud rate for MTK GPS's- some use 4800
 		GPS.begin(9600);
 		GPSSerial.begin(9600);
@@ -269,7 +211,7 @@ void setup(){
 		} else {
 			SerialUSB.print("Freq set to: "); SerialUSB.print(RF95_FREQ); SerialUSB.println(" MHz");
 			// The default transmitter power is 13dBm, using PA_BOOST.
-			// If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then 
+			// If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
 			// you can set transmitter powers from 5 to 23 dBm:
 			LoRa.setTxPower(23, false);
 			// You can optionally require this module to wait until Channel Activity
@@ -278,19 +220,20 @@ void setup(){
 			LoRa.setCADTimeout(RF95_CAD_TIMEOUT); //For the crowded RF environment of the SOLAR CAR CHALLENGE, this is essential
 		}
 	}
-	
+
 }//--------------------------------------------------------------------
 
 
 
-const char *string_list = 
+const char *string_list =
 	"Broadcasting Mode\n"//1
 	"ADC Readings\n"//2
 	"LoRa Test\n"//3
 	"GPS Status\n"//4
 	"Toggle Relay\n"//5
 	"View SCC Logo\n"//6
-	"View pi-top Logo";//7
+	"View pi-top Logo\n"
+	"Toggle 12/24 hour";
 //"---------------------\n"
 //ESSENTIAL THAT THESE TWO LISTS ARE IN THE SAME ORDER
 //SOLAR CAR MENU
@@ -302,16 +245,17 @@ enum{
 	GPS_PAGE,
 	RELAY_PAGE,
 	SCC_LOGO_PAGE,
-	PT_LOGO_PAGE
+	PT_LOGO_PAGE,
+	MODE_24_HOURS
 };
 
-//Main Arduino loop
-void loop(void){
-	#ifdef SOLAR_CAR	
+void loop_dummy(){
+	#ifdef SOLAR_CAR
 		solar_car_loop();
-	#else	
+	#endif // SOLAR_CAR
+	#ifdef CHASE_CAR
 		chase_car_loop();
-	#endif
+	#endif // CHASE_CAR
 }
 
 //Chase car states
@@ -327,7 +271,7 @@ enum{
 volatile unsigned long ppsTimestamp=0;
 
 			//u8g2_font_9x15_tf <-save this font because I like it
-			
+
 uint8_t data[] = "ACK";
 
 //Runs on repeat in chase car
@@ -340,7 +284,7 @@ void chase_car_loop(void) {
 	static int newPacketWaiting = 0;
 	switch(state){
 		case STARTUP:
-			connectionState = DISCONNECTED;	
+			connectionState = DISCONNECTED;
 			state = NO_CONNECTION_PAGE;
 			break;
 		case CONNECTION_LOST_PAGE:
@@ -352,12 +296,12 @@ void chase_car_loop(void) {
 			u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth("CONNECTION LOST")/2),33);
 			u8g2.print("CONNECTION LOST");
 			OLED_update();
-			set_main_led(LED_RED);
+			set_main_led(255, 0, 0);
 			fail_buzzer();
 			delay(2000);
-			set_main_led(LED_OFF);
+			set_main_led(0, 0, 0);
 			state = NO_CONNECTION_PAGE;
-			break;		
+			break;
 		case NO_CONNECTION_PAGE:
 			u8g2.clearBuffer();
 			u8g2.setDrawColor(1); // White
@@ -386,7 +330,7 @@ void chase_car_loop(void) {
 			}
 			break;
 		case HAVE_CONNECTION:
-			if(millis()-lastValidPacket>LORA_CONNECTION_RX_TIMEOUT){	
+			if(millis()-lastValidPacket>LORA_CONNECTION_RX_TIMEOUT){
 				state=CONNECTION_LOST_PAGE;
 				connectionState = DISCONNECTED;
 				break;
@@ -399,7 +343,7 @@ void chase_car_loop(void) {
 				state = RX_DATA_PAGE;
 			}
 			break;
-		case RX_DATA_PAGE:			
+		case RX_DATA_PAGE:
 			u8g2.clearBuffer();
 			u8g2.setDrawColor(1); // White
 			u8g2.drawBox(0,0,OLED_WIDTH,12);
@@ -423,7 +367,7 @@ void chase_car_loop(void) {
 		uint8_t from;
 		if (LoRaManager.recvfromAck(datRX, &len, &from)){ //here len is set to the number of octets copied
 			//Flash LED on RX
-			set_main_led(LED_GRN); //LED_BLU ?
+			//set_main_led(0, 255, 0);
 			interval=ONTIME;
 			prevMillisBlinky=millis();
 			//print info
@@ -450,25 +394,25 @@ void chase_car_loop(void) {
 		prevMillisBlinky=millis();
 		if(interval==ONTIME){
 			interval=OFFTIME;
-			set_main_led(LED_OFF);
+			set_main_led(0, 0, 0);
 		}else{
 			interval=ONTIME;
 			switch(state){
 				case WAITING_FOR_CONNECTION:
-					set_main_led(LED_RED);
+					//set_main_led(255, 0, 0);
 					break;
 				//case HAVE_CONNECTION:
 				//	set_main_led(LED_GRN);
 				//	break;
 			}
 		}
-	}	
+	}
 }
 
 volatile int sentInThisWindow=0;
 
 //Runs on repeat in solar car
-void solar_car_loop(void) {
+void solar_car_loop(){
 	static uint8_t current_selection = 0;
 	static int state=BROADCASTING_PAGE; //DEFAULT PAGE
 	static unsigned long prevMillis = 0;
@@ -481,252 +425,297 @@ void solar_car_loop(void) {
 	static int transmitFailStrikes=DISCONNECTED;
 	int broadcastFlag=0;
 	char gpsChar=0;
-	
+
+	auto trigger_alarm=[&](){
+		if (g_alarm_active && adc[0].voltage<g_low_voltage_bound){ //required low voltage alarm. can be disable by toggling relay
+			blare_alarm();
+		}
+	};
+
 	switch (state){
-		case HOME_PAGE:
-			if(enteringHomePage){
-				//u8g2.begin(/*Select=*/ BUTT0_PIN, /*Right/Next=*/ U8X8_PIN_NONE, /*Left/Prev=*/ U8X8_PIN_NONE, /*Up=*/ U8X8_PIN_NONE, /*Down=*/ BUTT1_PIN, /*Home/Cancel=*/ U8X8_PIN_NONE);
-				u8g2.setFont(u8g2_font_6x12_tr);
-				u8g2.clearBuffer();
-				u8g2.setDrawColor(1); // White
-				enteringHomePage=0;
+	case MODE_24_HOURS:
+		g_24_hour_mode^=1ul;
+		state=HOME_PAGE;
+		break;
+	case HOME_PAGE:
+		trigger_alarm();
+		if(enteringHomePage){
+			//u8g2.begin(/*Select=*/ BUTT0_PIN, /*Right/Next=*/ U8X8_PIN_NONE, /*Left/Prev=*/ U8X8_PIN_NONE, /*Up=*/ U8X8_PIN_NONE, /*Down=*/ BUTT1_PIN, /*Home/Cancel=*/ U8X8_PIN_NONE);
+			u8g2.setFont(u8g2_font_6x12_tr);
+			u8g2.clearBuffer();
+			u8g2.setDrawColor(1); // White
+			enteringHomePage=0;
+		}
+		//A blocking menu routine to select mode
+		current_selection = 0;
+		sprintf((char*)text,"Solar Car ID: %02d",PAIRING_ID);
+		current_selection = u8g2.userInterfaceSelectionList(text,current_selection,string_list);
+		if(current_selection!=0){
+			state = current_selection;
+			SerialUSB.print(current_selection);
+			SerialUSB.println(" selected");
+			enteringHomePage=1;//reset 'first time' flag
+			GPS.fix=0;//mark GPS as dead to force immediate screen update
+		}
+		//if(current_selection==0){
+		//	u8g2.userInterfaceMessage("Nothing selected.","",""," ok ");
+		break;
+	case BROADCASTING_PAGE:
+		//GPS parsing
+		gpsChar = GPS.read();
+		//if (gpsChar){SerialUSB.print(gpsChar);}
+		if (GPS.newNMEAreceived()){
+			if (!GPS.parse(GPS.lastNMEA())){  // this also sets the newNMEAreceived() flag to false
+				break;// we can fail to parse a sentence in which case we should just wait for another
 			}
-			//A blocking menu routine to select mode
-			current_selection = 0;
-			sprintf((char*)text,"Solar Car ID: %02d",PAIRING_ID);
-			current_selection = u8g2.userInterfaceSelectionList(text,current_selection,string_list);
-			if(current_selection!=0){		
-				state = current_selection;
-				SerialUSB.print(current_selection);
-				SerialUSB.println(" selected");
-				enteringHomePage=1;//reset 'first time' flag
-				GPS.fix=0;//mark GPS as dead to force immediate screen update
+		}
+		//If we have a GPS lock, broadcasting windows are determined by the PPS timestamp
+		//If there is no GPS lock, broadcasting windows are determined by LORA_TX_INTERVAL
+		if (GPS.fix==1){
+			//Update at a given time after PPS, based on device number
+			if (((millis()-ppsTimestamp)>TRANSMIT_WINDOW)&&(sentInThisWindow==0)){
+				broadcastFlag=1;
+				sentInThisWindow=1;
 			}
-			//if(current_selection==0){
-			//	u8g2.userInterfaceMessage("Nothing selected.","",""," ok ");
-			break;
-		case BROADCASTING_PAGE:
-			//GPS parsing	
-			gpsChar = GPS.read();
-			//if (gpsChar){SerialUSB.print(gpsChar);}
-			if (GPS.newNMEAreceived()) {
-				if (!GPS.parse(GPS.lastNMEA())) {  // this also sets the newNMEAreceived() flag to false
-					break;// we can fail to parse a sentence in which case we should just wait for another
-				} 
+		}
+		else{
+			//No GPS fix - broadcast at set intervals
+			if (millis()-prevBroadcastTimestamp>LORA_TX_INTERVAL){
+				prevBroadcastTimestamp=millis();
+				broadcastFlag=1;
 			}
-			//If we have a GPS lock, broadcasting windows are determined by the PPS timestamp
-			//If there is no GPS lock, broadcasting windows are determined by LORA_TX_INTERVAL
-			if(GPS.fix==1){
-				//Update at a given time after PPS, based on device number
-				if(((millis()-ppsTimestamp)>TRANSMIT_WINDOW)&&(sentInThisWindow==0)){
-					broadcastFlag=1;
-					sentInThisWindow=1;
-				}
-			} else {
-				//No GPS fix - broadcast at set intervals
-				if(millis()-prevBroadcastTimestamp>LORA_TX_INTERVAL){
-					prevBroadcastTimestamp=millis();
-					broadcastFlag=1;
-				}				
-			}	
-			if(broadcastFlag){
-				//Send, update
-				update_ADC_readings();
-				update_lora_packet();
-				SerialUSB.println((char*)datTX);//print data being sent
-				if(GPS.fix==0){
-					set_main_led(LED_ORA_DIM);
-				} else if(connectionState==CONNECTED){
-					set_main_led(LED_GRN);
-				} else{
-					set_main_led(LED_RED);
-				}
-				//set_main_led((connectionState==CONNECTED)?LED_GRN:LED_RED);
-				if(lora_send_data_to_chase_car(datTX,strlen((const char*)datTX))==SUCCESS){
-					//Transmitted successfully
-					connectionState = CONNECTED; //set to 0
-				} else {
-					//Failed to transmit
-					connectionState++; //failed transmits, non-zero is failed
-				}
-				set_main_led(LED_OFF);
-				GPS_print_status_to_serial();//todo - comment out
-				OLED_draw_full_data_page((connectionState>=LORA_CONNECTION_TX_FAILCOUNT)?DISCONNECTED:CONNECTED,GPS.fix); //draws all data to screen
-				broadcastFlag=0;		
-			}
-			//Wait for button press to exit
-			if((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
-				while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
-				state=HOME_PAGE;
-			}
-			break;
-		case ADC_PAGE:
-			//ADC
+		}
+		if (broadcastFlag){
+			trigger_alarm();
+
+			//Send, update
 			update_ADC_readings();
-			OLED_draw_ADC_page();
-			//Wait for button press to exit
-			if((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
-				while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
-				state=HOME_PAGE;
+			update_lora_packet();
+			SerialUSB.println((char*)datTX);//print data being sent
+			if (GPS.fix==0){
+				//set_main_led(LED_ORA_DIM); //TODO refactor, but not with magic numbers
 			}
-			break;
-		case LORA_PAGE:
-			if(enteringLoraPage){
-				//Run when entering the LoRa page
-				u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);  // set the font for the terminal window
-				u8g2log.begin(u8g2, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
-				u8g2log.setLineHeightOffset(0); // set extra space between lines in pixel, this can be negative
-				u8g2log.setRedrawMode(0);   // 0: Update screen with newline, 1: Update screen for every char
-				u8g2log.println("LORA DEBUGGING LOG");
-				u8g2log.println("To exit page, hold any button");
-				u8g2log.println("then release");
-				delay(1000);
-				//u8g2log.println("ATTEMPTING TO CONNECT TO");
-				//u8g2log.println("PAIRED PARTNER OVER LORA");
-				enteringLoraPage=0;
+			else if (connectionState==CONNECTED){
+				//set_main_led(0, 255, 0);
 			}
-			//Transmit data package to paired unit, at specified intervals
-			if(millis()-prevMillis>LORA_TX_INTERVAL){
-				prevMillis=millis();
-				//Populate data buffer with test data
-				sprintf((char*)datTX,"23:59:59,%d.00,%d.00,%d,33.0382N, 97.2816W,%d",random(7,17),random(38,58),random(-50,50),random(0,60));
-				//update_ADC_readings();
-				//update_lora_packet();
-				SerialUSB.println((char*)datTX);
-				switch(lora_send_data_to_chase_car(datTX,strlen((const char*)datTX))){
-					case SUCCESS:
-						//u8g2log.print(millis());
-						u8g2log.print("SUCCESS: Connection OKAY!\n");
-						connectionState=CONNECTED;
-						break;
-					case LORA_ACK_FAILURE:
-						u8g2log.print("FAIL: Connected but no reply\n");
-						connectionState++;//failed - increment
-						break;
-					case LORA_CAD_FAILURE:
-						u8g2log.print("FAIL: Couldn't connect to target\n");
-						connectionState++;//failed - increment
-						break;
-				}
+			else{
+				//set_main_led(255, 0, 0);
 			}
-			//Wait for button press to exit
-			if((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
-				while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
-				state=0;
-				//Reset entering flag
-				enteringLoraPage=1;
+			//set_main_led((connectionState==CONNECTED)?LED_GRN:LED_RED);
+			if (lora_send_data_to_chase_car(datTX,strlen((const char*)datTX))==SUCCESS){
+				//Transmitted successfully
+				connectionState = CONNECTED; //set to 0
 			}
-			break;
-		case GPS_PAGE:
-			if(enteringGpsPage){
-				u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);  // set the font for the terminal window
-				u8g2log.begin(u8g2, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
-				u8g2log.setLineHeightOffset(0); // set extra space between lines in pixel, this can be negative
-				u8g2log.setRedrawMode(0);   // 0: Update screen with newline, 1: Update screen for every char
-				u8g2log.println("GPS DEBUGGING LOG");
-				u8g2log.println("To exit page, hold any button");
-				u8g2log.println("then release");
-				delay(1000);
-				enteringGpsPage=0;
-			}	
-			gpsChar = GPS.read();
-			if (gpsChar) SerialUSB.print(gpsChar);
-			if (GPS.newNMEAreceived()) {
-				if (!GPS.parse(GPS.lastNMEA())) {  // this also sets the newNMEAreceived() flag to false
-					break;}  // we can fail to parse a sentence in which case we should just wait for another
+			else{
+				//Failed to transmit
+				connectionState++; //failed transmits, non-zero is failed
 			}
-			// if millis() or timer wraps around, we'll just reset it
-			if (prevMillis > millis())  prevMillis = millis();
-			// approximately every N seconds or so, print out the current stats
-			if (millis() - prevMillis > 5000) {
-				prevMillis = millis(); // reset the timer
-				GPS_print_status_to_serial();
-				GPS_print_status_to_logscreen();
+			set_main_led(0, 0, 0);
+			GPS_print_status_to_serial();//todo - comment out
+			OLED_draw_full_data_page((connectionState>=LORA_CONNECTION_TX_FAILCOUNT)?DISCONNECTED:CONNECTED,GPS.fix); //draws all data to screen
+			broadcastFlag=0;
+		}
+		//Wait for button press to exit
+		if ((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
+			while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
+			state=HOME_PAGE;
+		}
+		break;
+	case ADC_PAGE:
+		trigger_alarm();
+		//ADC
+		update_ADC_readings();
+		OLED_draw_ADC_page();
+		//Wait for button press to exit
+		if ((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
+			while ((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){
+				trigger_alarm();
 			}
-			//Wait for button press to exit
-			if((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
-				while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
-				state=0;
-				enteringGpsPage=1;
+			state=HOME_PAGE;
+		}
+		break;
+	case LORA_PAGE:
+		trigger_alarm();
+		if (enteringLoraPage){
+			//Run when entering the LoRa page
+			u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);  // set the font for the terminal window
+			u8g2log.begin(u8g2, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
+			u8g2log.setLineHeightOffset(0); // set extra space between lines in pixel, this can be negative
+			u8g2log.setRedrawMode(0);   // 0: Update screen with newline, 1: Update screen for every char
+			u8g2log.println("LORA DEBUGGING LOG");
+			u8g2log.println("To exit page, hold any button");
+			u8g2log.println("then release");
+			delay(1000);
+			//u8g2log.println("ATTEMPTING TO CONNECT TO");
+			//u8g2log.println("PAIRED PARTNER OVER LORA");
+			enteringLoraPage=0;
+		}
+		//Transmit data package to paired unit, at specified intervals
+		if (millis()-prevMillis>LORA_TX_INTERVAL){
+			prevMillis=millis();
+			//Populate data buffer with test data
+			sprintf((char*)datTX,"23:59:59,%d.00,%d.00,%d,33.0382N, 97.2816W,%d",random(7,17),random(38,58),random(-50,50),random(0,60));
+			//update_ADC_readings();
+			//update_lora_packet();
+			SerialUSB.println((char*)datTX);
+			switch (lora_send_data_to_chase_car(datTX,strlen((const char*)datTX))){
+			case SUCCESS:
+				//u8g2log.print(millis());
+				u8g2log.print("SUCCESS: Connection OKAY!\n");
+				connectionState=CONNECTED;
+				break;
+			case LORA_ACK_FAILURE:
+				u8g2log.print("FAIL: Connected but no reply\n");
+				connectionState++;//failed - increment
+				break;
+			case LORA_CAD_FAILURE:
+				u8g2log.print("FAIL: Couldn't connect to target\n");
+				connectionState++;//failed - increment
+				break;
 			}
-			break;
-		case RELAY_PAGE:
-			/*current_selection = u8g2.userInterfaceMessage("Selection:","Toggle Relay",""," ok \n cancel ");
-			if(current_selection==1){
-				SerialUSB.println("Toggling relay");
-				relay(TOGGLE);
-			}*/
+		}
+		//Wait for button press to exit
+		if ((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
+			while ((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){
+				trigger_alarm();
+			}
+			state=0;
+			//Reset entering flag
+			enteringLoraPage=1;
+		}
+		break;
+	case GPS_PAGE:
+		trigger_alarm();
+		if (enteringGpsPage){
+			u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);  // set the font for the terminal window
+			u8g2log.begin(u8g2, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
+			u8g2log.setLineHeightOffset(0); // set extra space between lines in pixel, this can be negative
+			u8g2log.setRedrawMode(0);   // 0: Update screen with newline, 1: Update screen for every char
+			u8g2log.println("GPS DEBUGGING LOG");
+			u8g2log.println("To exit page, hold any button");
+			u8g2log.println("then release");
+			delay(1000);
+			enteringGpsPage=0;
+		}
+		gpsChar = GPS.read();
+		if (gpsChar){
+			SerialUSB.print(gpsChar);
+		}
+		if (GPS.newNMEAreceived()){
+			if (!GPS.parse(GPS.lastNMEA())){  // this also sets the newNMEAreceived() flag to false
+				break;
+			}  // we can fail to parse a sentence in which case we should just wait for another
+		}
+		// if millis() or timer wraps around, we'll just reset it
+		if (prevMillis > millis()){
+			prevMillis = millis();
+		}
+		// approximately every N seconds or so, print out the current stats
+		if (millis() - prevMillis > 5000){
+			prevMillis = millis(); // reset the timer
+			GPS_print_status_to_serial();
+			GPS_print_status_to_logscreen();
+		}
+		//Wait for button press to exit
+		if ((digitalRead(BUTT0_PIN)==LOW)||(digitalRead(BUTT1_PIN)==LOW)){
+			while ((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){
+				trigger_alarm();
+			}
+			state=0;
+			enteringGpsPage=1;
+		}
+		break;
+	case RELAY_PAGE:
+		/*current_selection = u8g2.userInterfaceMessage("Selection:","Toggle Relay",""," ok \n cancel ");
+		if(current_selection==1){
+			SerialUSB.println("Toggling relay");
 			relay(TOGGLE);
-			state = HOME_PAGE;
-			break;
-		case SCC_LOGO_PAGE:
-			//SCC Logo
-			u8g2.clearBuffer();
-			u8g2.setDrawColor(0);
-			u8g2.drawBitmap(0,0,16,64,SCC_Logo_Horiz);
-			OLED_update();
-			state = HOME_PAGE;
-			while((digitalRead(BUTT0_PIN)!=LOW)&&(digitalRead(BUTT1_PIN)!=LOW)){}
-			while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}	
-			break;
-		case PT_LOGO_PAGE:
-			//pi-top Logo
-			u8g2.clearBuffer();
-			u8g2.setDrawColor(1);
-			u8g2.drawBitmap(0,0,16,64,pitop_Logo_Horiz);
-			OLED_update();
-			state = HOME_PAGE;
-			while((digitalRead(BUTT0_PIN)!=LOW)&&(digitalRead(BUTT1_PIN)!=LOW)){}
-			while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}	
-			break;
+		}*/
+		relay(TOGGLE);
+		state = HOME_PAGE;
+		break;
+	case SCC_LOGO_PAGE:
+		//SCC Logo
+		u8g2.clearBuffer();
+		u8g2.setDrawColor(0);
+		u8g2.drawBitmap(0,0,16,64,SCC_Logo_Horiz);
+		OLED_update();
+		state=HOME_PAGE;
+		while ((digitalRead(BUTT0_PIN)!=LOW)&&(digitalRead(BUTT1_PIN)!=LOW)){
+			trigger_alarm();
+		}
+		while ((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){
+			trigger_alarm();
+		}
+		break;
+	case PT_LOGO_PAGE:
+		//pi-top Logo
+		u8g2.clearBuffer();
+		u8g2.setDrawColor(1);
+		u8g2.drawBitmap(0,0,16,64,pitop_Logo_Horiz);
+		OLED_update();
+		state=HOME_PAGE;
+		while ((digitalRead(BUTT0_PIN)!=LOW)&&(digitalRead(BUTT1_PIN)!=LOW)){
+			trigger_alarm();
+		}
+		while ((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){
+			trigger_alarm();
+		}
+		break;
 	}
 
 	// if millis() or prevMillis wraps around, we'll just reset it
-	if (prevMillis > millis()){  prevMillis = millis();}
+	if (prevMillis>millis()){
+		prevMillis=millis();
+	}
 }
 
 
 
-void OLED_fw_update_prompt(void){
-	unsigned long millisMarker = millis();
+void OLED_fw_update_prompt(){//TODO MARK: CLEAN BUT NOT REFACTORED
+	unsigned long millisMarker=millis();
 	//Wipe the page clean
-	u8g2.clearBuffer();	
+	u8g2.clearBuffer();
 	//Draw the title bar
-	u8g2.setDrawColor(1); // White
-	u8g2.drawBox(0,0,OLED_WIDTH,15);
+	u8g2.setDrawColor(1); //White
+	u8g2.drawBox(0, 0, OLED_WIDTH,15);
 	u8g2.setFont(u8g2_font_crox2hb_tf);
 	//u8g2.setFont(u8g2_font_profont10_tf); //5 pixel height
-	u8g2.setDrawColor(0); // Black
-	sprintf((char*)text,"Update Firmware"/*V%d.%d"*/,FIRMWARE_VERSION_MAJOR,FIRMWARE_VERSION_MINOR);
+	u8g2.setDrawColor(0); //Black
+	sprintf((char*)text, "Update Firmware", FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR);
 	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),11);
 	u8g2.print(text);
 	//Body text
 	u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);
-	u8g2.setDrawColor(1); // White
+	u8g2.setDrawColor(1); //White
 	//Print current version
-	sprintf((char*)text,"Current Firmware: V%d.%d",FIRMWARE_VERSION_MAJOR,FIRMWARE_VERSION_MINOR);
-	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),23);
+	sprintf((char*)text, "Current Firmware: v%d.%d", FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR);
+	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2), 23);
 	u8g2.print(text);
 	//Encourage user to update to latest
-	sprintf((char*)text,"Please upgrade to the");
-	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),35);
+	sprintf((char*)text, "Please flash the");
+	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2), 35);
 	u8g2.print(text);
-	sprintf((char*)text,"latest firmware from:");
-	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),35+u8g2.getMaxCharHeight());
+	sprintf((char*)text, "latest firmware from");
+	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2), 35+u8g2.getMaxCharHeight());
 	u8g2.print(text);
-	sprintf((char*)text,"https://github.com/");
-	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),50);
-	u8g2.print(text);	
-	sprintf((char*)text,"SolarCarChallenge/pi-top");
-	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),50+u8g2.getMaxCharHeight());
+	sprintf((char*)text, "your local computer.");
+	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2), 35+2*u8g2.getMaxCharHeight());
+	u8g2.print(text);
+	sprintf((char*)text, "-Andy Huang");
+	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2), 35+3*u8g2.getMaxCharHeight());
 	u8g2.print(text);
 	//Update screen
 	OLED_update();
 	//Wait for button press to exit
-	while((digitalRead(BUTT0_PIN)!=LOW)&&(digitalRead(BUTT1_PIN)!=LOW)){
-		if(millis()-millisMarker>30000){return;} //exit after timeout
+	while (digitalRead(BUTT0_PIN)!=LOW && digitalRead(BUTT1_PIN)!=LOW){
+		if (millis()-millisMarker>10*1000){
+			return;
+		} //exit after timeout
 	}
-	while((digitalRead(BUTT0_PIN)!=HIGH)||(digitalRead(BUTT1_PIN)!=HIGH)){}
+	while (digitalRead(BUTT0_PIN)!=HIGH || digitalRead(BUTT1_PIN)!=HIGH){
+		//busy wait
+	}
 }
 
 void OLED_wrong_fw_warning(void){
@@ -746,36 +735,37 @@ void OLED_wrong_fw_warning(void){
 	u8g2.setFont(u8g2_font_profont10_tf);
 	u8g2.setDrawColor(1); // White
 	#ifdef SOLAR_CAR
-		sprintf((char*)text,"This is a chase-car board");
+		sprintf((char*)text,"This is a chase car board");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),30);
 		u8g2.print(text);
 		sprintf((char*)text,"");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),30+u8g2.getMaxCharHeight());
 		u8g2.print(text);
-		sprintf((char*)text,"Please comment out");
+		sprintf((char*)text,"Please flash the solar");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),45);
 		u8g2.print(text);
-		sprintf((char*)text,"'#define SOLAR_CAR'");
+		sprintf((char*)text,"car board firmware");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),45+u8g2.getMaxCharHeight());
 		u8g2.print(text);
-	#else
+	#endif // SOLAR_CAR
+	#ifdef CHASE_CAR
 		u8g2.setFont(u8g2_font_tom_thumb_4x6_mf);
 		u8g2.setDrawColor(1); // White
-		sprintf((char*)text,"This is a solar-car board");
+		sprintf((char*)text,"This is a solar car board");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),30);
 		u8g2.print(text);
 		sprintf((char*)text,"");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),30+u8g2.getMaxCharHeight());
 		u8g2.print(text);
-		sprintf((char*)text,"Please uncomment");
+		sprintf((char*)text,"Please flash the chase");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),45);
 		u8g2.print(text);
-		sprintf((char*)text,"'#define SOLAR_CAR'");
+		sprintf((char*)text,"car board firmware");
 		u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),45+u8g2.getMaxCharHeight());
 		u8g2.print(text);
-	#endif
+	#endif // CHASE_CAR
 	//Update screen
-	OLED_update();	
+	OLED_update();
 }
 
 void OLED_draw_full_data_page(int connectionStatus, int gpsFix){
@@ -784,7 +774,7 @@ void OLED_draw_full_data_page(int connectionStatus, int gpsFix){
 
 	//Wipe the page clean
 	u8g2.clearBuffer();
-	
+
 	//Draw the title bar
 	u8g2.setDrawColor(1); // White
 	u8g2.drawBox(0,0,OLED_WIDTH,12);
@@ -795,7 +785,7 @@ void OLED_draw_full_data_page(int connectionStatus, int gpsFix){
 	else{sprintf((char*)text,"DISCONNECTED");}
 	u8g2.setCursor((OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2),11);
 	u8g2.print(text);
-	
+
 	//GPS fix
 	if(gpsFix==0){
 		//No GPS fix
@@ -814,23 +804,32 @@ void OLED_draw_full_data_page(int connectionStatus, int gpsFix){
 	u8g2.setFont(u8g2_font_u8glib_4_tf); //4 pixel height
 	//u8g2.setFont(u8g2_font_profont10_tf); //5 pixel height
 	//Time & date
-	sprintf((char*)text,"TIME: %s  DATE: %s",pack.gpsTime,pack.gpsDate);
+	update_date();
+	update_time(g_24_hour_mode);
+	if (g_24_hour_mode){
+		sprintf((char*)text, "TIMESTAMP: %sT%sZ", pack.gpsDate, pack.gpsTime);
+	}
+	else{ //remove UTC specifier to fit entire string on page for 12 hour mode
+		sprintf((char*)text, "TIMESTAMP: %sT%s", pack.gpsDate, pack.gpsTime);
+	}
 	cursorXpos = (OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2); //Justify to center
 	u8g2.setCursor(cursorXpos,cursorYpos);
 	u8g2.print(text);
 	//GPS Coordinates
-	sprintf((char*)text,"LOCATION: %s,%s",pack.gpsLattitude,pack.gpsLongitude);
+	update_latitude();
+	update_longitude();
+	sprintf((char*)text, "LOCATION: %s, %s", pack.gpsLattitude, pack.gpsLongitude);
 	cursorXpos = (OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2); //Justify to center
 	cursorYpos+=u8g2.getMaxCharHeight();
 	u8g2.setCursor(cursorXpos,cursorYpos);
 	u8g2.print(text);
 	//Speed & Signal Strength
-	sprintf((char*)text,"SATELLITES: % 2d  SPEED: %0.1f mph",pack.gpsSatellites,pack.gpsSpeed);
+	sprintf((char*)text,"SATELLITES: %2d SPEED: %0.1f mph", pack.gpsSatellites, pack.gpsSpeed);
 	cursorXpos = (OLED_WIDTH/2)-(u8g2.getStrWidth((const char*)text)/2); //Justify to center
 	cursorYpos+=u8g2.getMaxCharHeight();
 	u8g2.setCursor(cursorXpos,cursorYpos);
 	u8g2.print(text);
-	
+
 	//Draw ADC voltages
 	u8g2.setDrawColor(1); // White
 	u8g2.setFont(u8g2_font_u8glib_4_tf); //4 pixel height
@@ -841,7 +840,7 @@ void OLED_draw_full_data_page(int connectionStatus, int gpsFix){
 	u8g2.setCursor(BP_ADC_XPOS,BP_ADC_YPOS);
 	sprintf((char*)text,"%04.1f|%04.1f|%04.1f|%04.1f",adc[0].voltage,adc[1].voltage,adc[2].voltage,adc[3].voltage);
 	u8g2.print(text);
-	
+
 	//Draw to screen
 	OLED_update();
 }
@@ -854,31 +853,32 @@ double GPS_degMin_to_decDeg (float degMin) {
 	double min = 0.0;
 	double decDeg = 0.0;
 	//get the minutes, fmod() requires double
-	min = fmod((double)degMin, 100.0);	
+	min = fmod((double)degMin, 100.0);
 	//rebuild coordinates in decimal degrees
 	degMin = (int) ( degMin / 100 );
-	decDeg = degMin + ( min / 60 );	
+	decDeg = degMin + ( min / 60 );
 	return decDeg;
 }
 
 
 void GPS_print_status_to_serial(void){
-	SerialUSB.print("\nTime: ");
-	SerialUSB.print(GPS.hour, DEC); SerialUSB.print(':');
-	SerialUSB.print(GPS.minute, DEC); SerialUSB.print(':');
-	SerialUSB.println(GPS.seconds, DEC); //SerialUSB.print('.');
-	//SerialUSB.println(GPS.milliseconds);
-	SerialUSB.print("Date: 20");//20xx year assumption
-	SerialUSB.print(GPS.year, DEC); SerialUSB.print('-');
-	SerialUSB.print(GPS.month, DEC); SerialUSB.print("-");
-	SerialUSB.println(GPS.day, DEC);
+	update_date();
+	update_time();
+	SerialUSB.print("\nDate: ");
+	SerialUSB.println(pack.gpsDate);
+	SerialUSB.print("Time: ");
+	SerialUSB.println(pack.gpsTime);
+
 	SerialUSB.print("Fix: "); SerialUSB.print((int)GPS.fix);
 	SerialUSB.print(" quality: "); SerialUSB.println((int)GPS.fixquality);
-	if (GPS.fix) {
+	if (GPS.fix){
+		update_latitude();
+		update_longitude();
 		SerialUSB.print("Location: ");
-		SerialUSB.print(GPS_degMin_to_decDeg(GPS.latitude), 4);SerialUSB.print(GPS.lat);
+		SerialUSB.print(pack.gpsLattitude);
 		SerialUSB.print(", ");
-		SerialUSB.print(GPS_degMin_to_decDeg(GPS.longitude), 4);SerialUSB.println(GPS.lon);
+		SerialUSB.print(pack.gpsLongitude);
+		SerialUSB.print("\n");
 		SerialUSB.print("Speed (mph): "); SerialUSB.println(convertKnotsToMph(GPS.speed),1);
 		SerialUSB.print("Angle: "); SerialUSB.println(GPS.angle);
 		SerialUSB.print("Altitude: "); SerialUSB.println(GPS.altitude);
@@ -886,23 +886,24 @@ void GPS_print_status_to_serial(void){
 	}
 }
 
-void GPS_print_status_to_logscreen(void){
-	u8g2log.print("\nTime (UTC): ");
-	u8g2log.print(GPS.hour, DEC); u8g2log.print(':');
-	u8g2log.print(GPS.minute, DEC); u8g2log.print(':');
-	u8g2log.println(GPS.seconds, DEC); //u8g2log.print('.');
-	//u8g2log.println(GPS.milliseconds);
-	u8g2log.print("Date: 20");//20xx year assumption
-	u8g2log.print(GPS.year, DEC); SerialUSB.print('-');
-	u8g2log.print(GPS.month, DEC); SerialUSB.print("-");
-	u8g2log.println(GPS.day, DEC);
+void GPS_print_status_to_logscreen(){
+	update_date();
+	update_time(g_24_hour_mode);
+	u8g2log.print("\nDate: ");
+	u8g2log.println(pack.gpsDate);
+	u8g2log.print("Time: ");
+	u8g2log.println(pack.gpsTime);
+
 	u8g2log.print("Fix: "); u8g2log.print((int)GPS.fix);
 	u8g2log.print(" Quality: "); u8g2log.println((int)GPS.fixquality);
-	if (GPS.fix) {
+	if (GPS.fix){
+		update_latitude();
+		update_longitude();
 		u8g2log.print("Location: ");
-		u8g2log.print(GPS_degMin_to_decDeg(GPS.latitude), 4);u8g2log.print(GPS.lat);
+		u8g2log.print(pack.gpsLattitude);
 		u8g2log.print(", ");
-		u8g2log.print(GPS_degMin_to_decDeg(GPS.longitude), 4);u8g2log.println(GPS.lon);
+		u8g2log.print(pack.gpsLongitude);
+		u8g2log.print("\n");
 		u8g2log.print("Speed: "); u8g2log.println(convertKnotsToMph(GPS.speed),1);
 		u8g2log.print("Angle: "); u8g2log.println(GPS.angle);
 		u8g2log.print("Altitude: "); u8g2log.println(GPS.altitude);
@@ -932,7 +933,7 @@ void set_main_led(uint8_t r, uint8_t g, uint8_t b){
 
 //Indicate error on LED and buzzer
 void indicate_critical_error(void){
-	set_main_led(LED_RED);
+	set_main_led(255, 0, 0);
 	error_buzzer(3);
 }
 
@@ -975,26 +976,26 @@ void fail_buzzer(void){
 }
 
 //Fills outgoing LoRa with the latest known data
-void update_lora_packet(void){	
+void update_lora_packet(void){
 	//Time & Date
-	sprintf((char*)pack.gpsTime,"%02d:%02d:%02d",GPS.hour,GPS.minute,GPS.seconds);
-	sprintf((char*)pack.gpsDate,"20%02d-%02d-%02d",GPS.year,GPS.month,GPS.day);
+	update_date();
+	update_time();
 	//Location
-	sprintf((char*)pack.gpsLattitude,"%07.4f%c",GPS_degMin_to_decDeg(GPS.latitude),GPS.lat);
-	sprintf((char*)pack.gpsLongitude,"%07.4f%c",GPS_degMin_to_decDeg(GPS.longitude),GPS.lon);	
+	update_latitude();
+	update_longitude();
 	//Speed
-	pack.gpsSpeed = convertKnotsToMph(GPS.speed);
+	pack.gpsSpeed=convertKnotsToMph(GPS.speed);
 	//Satellites
-	pack.gpsSatellites = GPS.satellites;
+	pack.gpsSatellites=GPS.satellites;
 	//ADC readings
-	pack.adc0 = adc[0].voltage;
-	pack.adc1 = adc[1].voltage;
+	pack.adc0=adc[0].voltage;
+	pack.adc1=adc[1].voltage;
 	//Jarret's line for calculating current:
-	pack.current = ((adc[2].voltage/**PrimaryCorrect*/)-(adc[3].voltage/**PrimaryCorrect*/))*(1/Shunt);
-	//Assemble it all together	
-	memset(datTX,0,RH_RF95_MAX_MESSAGE_LEN);//clear the buffer
-	sprintf((char*)datTX,"%s,%05.2f,%05.2f,%0.4f,%s,%s,%0.1f",pack.gpsTime,pack.adc0,pack.adc1,pack.current,pack.gpsLattitude,pack.gpsLongitude,pack.gpsSpeed);
-	/*	
+	pack.current=((adc[2].voltage/**PrimaryCorrect*/)-(adc[3].voltage/**PrimaryCorrect*/)) * (1/Shunt);
+	//Assemble it all together
+	memset(datTX, 0, RH_RF95_MAX_MESSAGE_LEN);//clear the buffer
+	sprintf((char*)datTX, "%s,%05.2f,%05.2f,%0.4f,%s,%s,%0.1f", pack.gpsTime, pack.adc0, pack.adc1, pack.current, pack.gpsLattitude, pack.gpsLongitude, pack.gpsSpeed);
+	/*
 	//Create string to send
 	String FinalString =	\
 		String(GPS.hour)	+	\
@@ -1017,7 +1018,7 @@ void update_lora_packet(void){
 		", "	+	\
 		String(convertKnotsToMph(GPS.speed),1);
 	//Convert to character array to be sent, load into the output buffer
-	FinalString.toCharArray((char*)datTX, FinalString.length());	
+	FinalString.toCharArray((char*)datTX, FinalString.length());
 	*/
 }
 
@@ -1051,7 +1052,7 @@ int lora_send_data_to_chase_car(uint8_t* data,uint8_t len){
 	}
 }
 
-	
+
 
 void update_ADC_readings(void){
 	//Compensate for layout pin mapping here
@@ -1066,7 +1067,7 @@ void update_ADC_readings(void){
 	adc[7].rawReading = ExtADC.analogRead(7);
 	interrupts();
 	//Calculate voltages
-	for(int x=0;x<8;x++){	
+	for(int x=0;x<8;x++){
 		adc[x].voltage = float(adc[x].rawReading*16); //actual value after mapping and PD
 		adc[x].voltage /= 1000; //Convert from millivolts to volts
 	}
@@ -1125,37 +1126,38 @@ void OLED_draw_ADC_page(void){
 	OLED_update();
 	u8g2.setFontPosBaseline();
 }
-	
-	
+
+
 
 void relay(int command){
-	static uint8_t state=LOW;
+	static uint8_t state=0x00;
 	switch (command){
-		case HIGH:	
-			state=0xFF;
-			digitalWrite(RELAY_PIN,state);
-			SerialUSB.println("Relay ON");
-			break;
-		case LOW:
-			state=0x00;
-			digitalWrite(RELAY_PIN,state);
-			SerialUSB.println("Relay OFF");
-			break;
-		case TOGGLE:
-			state=~state;
-			digitalWrite(RELAY_PIN,state);
-			SerialUSB.print("Relay TOGGLED (");
-			SerialUSB.print(state?"ON":"OFF");
-			SerialUSB.println(")");
-			break;
+	case HIGH:
+		state=0xFF;
+		digitalWrite(RELAY_PIN, HIGH);
+		//SerialUSB.println("Relay ON");
+		break;
+	case LOW:
+		state=0x00;
+		digitalWrite(RELAY_PIN, LOW);
+		//SerialUSB.println("Relay OFF");
+		break;
+	case TOGGLE:
+		state=~state;
+		digitalWrite(RELAY_PIN, state==0xFF);
+		//SerialUSB.print("Relay TOGGLED (");
+		//SerialUSB.print(state?"ON":"OFF");
+		//SerialUSB.println(")");
+		break;
 	}
+	g_alarm_active= state==0xFF;
 }
 
 void GPS_pps(void){
 	ppsTimestamp=millis();
 	sentInThisWindow=0;//new window
 	#ifndef OLD_HARDWARE_PINOUT
-		analogWrite(RGB_LED_BLU_PIN,digitalRead(GPS_1PPS_PIN)?255:0);
+		//analogWrite(RGB_LED_BLU_PIN,digitalRead(GPS_1PPS_PIN)?255:0); //why would you not refactor this pi-top team???
 	#endif
 	//digitalWrite(BUZZER_PIN,digitalRead(GPIO3_PIN));
 }
@@ -1171,7 +1173,7 @@ void GPS_pps(void){
   if (GPS.newNMEAreceived()) {
     // a tricky thing here is if we print the NMEA sentence, or data
     // we end up not listening and catching other sentences!
-    // so be very wary if using OUTPUT_ALLDATA and trytng to print out data     
+    // so be very wary if using OUTPUT_ALLDATA and trytng to print out data
     //Read the analog to digital converter voltages
     adc0 = ExtADC.readADC_SingleEnded(0);
     adc1 = ExtADC.readADC_SingleEnded(1);
@@ -1187,10 +1189,10 @@ void GPS_pps(void){
         //display.setCursor(0, 2);
         display.println("Current: " + String(round((current)*10)/10));
         //display.setCursor(0, 3);
-        display.println("Speed: " + String(round((GPS.speed)*10)/10));   
-        uint8_t data[120];   
+        display.println("Speed: " + String(round((GPS.speed)*10)/10));
+        uint8_t data[120];
         //Create Output sting
-        String FinalString= String(GPS.hour)+":"+String(GPS.minute)+":"+String(GPS.seconds)+ ", " + String((adc0*PrimaryCorrect),4)+ ", " + String((adc1*PrimaryCorrect),4) + ", " + String((current),4) + ", "+ String(GPS.latitude,4) + String(GPS.lat) + ", " + String(GPS.longitude,4) + String(GPS.lon) + ", " + String(GPS.speed);   
+        String FinalString= String(GPS.hour)+":"+String(GPS.minute)+":"+String(GPS.seconds)+ ", " + String((adc0*PrimaryCorrect),4)+ ", " + String((adc1*PrimaryCorrect),4) + ", " + String((current),4) + ", "+ String(GPS.latitude,4) + String(GPS.lat) + ", " + String(GPS.longitude,4) + String(GPS.lon) + ", " + String(GPS.speed);
         //convert output sting to bytes (uint8_t) that can be transmitted
         FinalString.toCharArray((char*)data, FinalString.length());
         //transmit the data string

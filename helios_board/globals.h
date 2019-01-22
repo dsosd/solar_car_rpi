@@ -1,7 +1,5 @@
-#ifndef GLOBALS_H_
-#define GLOBALS_H_
-
-
+#ifndef GLOBALS_H
+#define GLOBALS_H
 
 //MCU Serial Notes:
 //todo
@@ -101,7 +99,8 @@ enum{
 	FAILED,
 	LORA_ACK_FAILURE,
 	LORA_CAD_FAILURE
-	};
+};
+
 enum{
 	CONNECTED=0,//has to be 0, fail strikes increment this value
 	DISCONNECTED
@@ -109,10 +108,10 @@ enum{
 
 //LED DEFINITIONS ==================
 //RGB LED PRESETS
-#define LED_OFF 0,0,0
-#define LED_RED 255,0,0
-#define LED_GRN 0,255,0
-#define LED_BLU 0,0,255
+//#define LED_OFF 0,0,0
+//#define LED_RED 255,0,0
+//#define LED_GRN 0,255,0
+//#define LED_BLU 0,0,255
 //#define RGB_BLU_DIM 0,0,250
 #define LED_GRN_DIM 0,50,0
 #define LED_PUR_DIM 10,0,10
@@ -121,4 +120,4 @@ enum{
 #define ONTIME  200
 #define OFFTIME 2500
 
-#endif /* GLOBALS_H_ */
+#endif // GLOBALS_H
