@@ -1,5 +1,6 @@
 {
   "uuid": "f8af2d48_569f9e25_9b5e0cb2_f62382e8",
   "owner": "dsosd",
-  "canonical_name": "solar_car_rpi"
+  "canonical_name": "solar_car_rpi",
+  "bootstrap_pull_url": "https://github.com/dsosd/solar_car_rpi"
 }
